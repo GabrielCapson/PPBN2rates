@@ -1,0 +1,332 @@
+%% PPB model including diazotrophic growth for rate estimation
+%-------------------------------------------------------------------------
+% 23-11-2023 Author: Gabriel Capson-Tojo; gabriel.capson-tojo@inrae.fr 
+%-------------------------------------------------------------------------
+
+%% Function (biochemical model)
+
+function [dydt,tout,pHout] = PPB_N2_pH(t,y,tu,u,Vliq,Vgas)
+% Organise the input so that it can handle the time steppin
+% via interpolation of flowrates according to time steps
+    u = interp1(tu,u,t);
+
+    persistent t_list pH_list
+    if t==0
+        clear tlist pHlist
+    end
+    t_list = [t_list;t];
+
+%%  State variables
+
+    % Soluble Components
+    SIC = y(1);            % molHCO3-C/L
+    SAc = y(2);            % mgCOD/L
+    SPro = y(3);           % mgCOD/L
+    SBu = y(4);            % mgCOD/L
+    SH2 = y(5);            % mgCOD/L
+    SIN = y(6);            % mgNH3-N/L
+    SIP = y(7);            % mgPO4-P/L
+    SN2 = y(8);            % mgN2-N/L
+    % Particulate Components
+    XPB = y(9);            % mgCOD/L
+    XFer = y(10);          % mgCOD/L
+    XC = y(11);            % mgCOD/L
+    % Gas
+    H2_gas = y(12);        % mol H2/L
+    CO2_gas = y(13);       % mol C/L
+    N2_gas = y(14);        % mol N2/L
+    % pH
+    SHCO3_ = y(15);        % mol C/L
+    SNH3 = y(16);          % mg N/L
+    SH2PO4_ = y(17);       % mg P/L
+    SAc_ = y(18);          % mgCOD/L
+    SPro_ = y(19);         % mgCOD/L    
+    SBu_ = y(20);          % mgCOD/L
+    
+%%  Parameters
+% Stoichiometry non-diazotrohic growth       
+    % Autotrophic uptake H2
+    %f_IC_au = 1.0/40320;                   % molHCO3-C/mgCOD
+    f_H2_au = 1;                            % mgCOD/mgCOD
+    Y_PB_au = 1;                            % mgCOD/mgCOD
+    % Heterotrophic uptake of VFAs
+    %f_IC_ac_ph = 5.2E-06;                  % mgCOD/mgCOD
+    f_IC_pro_ph = -2.05612690057643E-06;    % mgCOD/mgCOD
+    %f_IC_bu_ph = -2.80630998175774E-06;    % mgCOD/mgCOD
+    Y_PB_het = 1;                           % mgCOD/mgCOD
+    
+% Stoichiometry diazotrohic growth       
+N_X_PB = 0.0786; % mg N/mg COD Calibrated ePaNM
+COD_SN2 = -3/2*16/14;    
+    % Autotrophic uptake H2  
+    Y_PB_au_diazo = 1/(1-COD_SN2*N_X_PB);   % mgCOD/mgCOD
+    % Heterotrophic uptake of VFAs
+    Y_PB_ac_diazo = 1/(1-N_X_PB*COD_SN2+N_X_PB*16/28);% mgCOD/mgCOD   
+    Y_PB_pro_diazo = Y_PB_ac_diazo;         % mgCOD/mgCOD
+    Y_PB_bu_diazo = Y_PB_ac_diazo;          % mgCOD/mgCOD
+    f_H2_diazo = 16/28*Y_PB_ac_diazo*N_X_PB;% mgCOD/mgCOD H2 produced (1 molH2/moLN2)
+    % Fermenters
+    Y_fer = 0.05;   
+    
+% Kinetic parameters
+    % Specific uptake rates (Monod) and 1st order rates
+    kM_H2 = 2.21;                       % d-1 (Auto model)
+    kM_Ac = 2.64;                      % d-1 (ePAnM)
+    kM_Pro = 1.68;                      % d-1 (kM_vfa ePAnM)
+    kM_Bu = 1.68;                       % d-1 (kM_vfa ePAnM) 
+    kM_H2_diazo = 1.023;                % d-1 (cal)
+    kM_Ac_diazo = 4.19;                 % d-1 (cal)
+    kM_Pro_diazo = 4.292;               % d-1 (cal)
+    kM_Bu_diazo = 4.382;                % d-1 (cal)
+    kM_fer_pro = 13;                    % d-1 (ADM1)
+    kM_fer_bu = 20;                     % d-1 (ADM1)
+    kDEC_PB = 0.09;                     % d-1 (PAnM)
+    kDEC_Fer = 0.02;                    % d-1 (ADM1)
+  
+    % Half saturation constants 
+    K_IC = 4.2e-4;                      % mol HCO3-C/L (PAnM)
+    K_H2 = 0.33;                        % mg COD/L (ePAnM)
+    K_H2_diazo = 0.50;                  % mg COD/L (cal)
+    K_N2_het = 0.002;                   % mg N2-N/L (own)
+    K_N2_aut = K_N2_het;                % mg N2-N/L (own)
+    K_Ac = 10;                          % mg COD/L (ePAnM) 
+    K_Ac_diazo = 0.02;                  % mg COD/L (cal)  
+    K_Pro = 0.0118;                     % mg COD/L (ePAnM)
+    K_Pro_diazo = 0.230;                % mg COD/L (cal)  
+    K_Bu = 0.0118;                      % mg COD/L (ePAnM)
+    K_Bu_diazo = 0.176;                 % mg COD/L (cal) 
+    K_fer_pro = 0.3;                    % d-1 (ADM1)
+    K_fer_bu = 0.3;                     % d-1 (ADM1)
+    
+% Inhibition constants (no FAN, light, pH or DO for the moment; could be added as in ePAnM)
+    K_IN = 0.02;                        % mg NH3-N/L (PAnM)
+    K_IP = 0.081;                       % mg PO4-P/L (PAnM)
+    K_IN_N2 = 0.002;                    % mg NH3-N/L (own; to inhibit N fixation if there is ammonia)
+    K_IN_fer = 0.00145;                 % mg NH3-N/L (ADM1)
+    % K_IP_fer = K_IP*K_IN_fer/K_IN;      % mg PO4-P/L (own)
+    KI_H2_pro = 3.5E-6;                 % mg COD/L (ADM1)
+    KI_H2_bu = 1E-5;                    % mg COD/L (ADM1)
+    
+%% C, N, P contents and stoichiometric coefficients
+%C contents
+C_Ac = 0.00003125;       % mol C/mg COD
+C_Pro = 0.00002679;      % mol C/mg COD 
+C_Bu = 0.00002381;       % mol C/mg COD 
+C_X = 0.000028840870028132;  % mol C/mg COD (assumed equal for any X).  
+
+% N contents
+N_X_Fer = N_X_PB;
+
+% P contents
+P_X_PB = 0.0122; % mg P/mg COD Calibrated ePaNM
+P_X_Fer = P_X_PB;
+
+% Stoichiometric coefficients C, N, P balances
+v1_1 = -Y_PB_au*C_X;
+v1_2 = C_Ac-Y_PB_het*C_X;
+v1_4 = C_Bu-Y_PB_het*C_X;
+v1_5 = -Y_PB_au_diazo*C_X;
+v1_6 = C_Ac-Y_PB_ac_diazo*C_X;
+v1_7 = C_Pro-Y_PB_pro_diazo*C_X;
+v1_8 = C_Bu-Y_PB_bu_diazo*C_X;
+v1_9 = C_Pro-(C_Ac*(1-Y_fer)*0.57)-Y_fer*C_X;
+v6_1 = -Y_PB_au*N_X_PB;
+v6_2 = -Y_PB_het*N_X_PB;
+v6_3 = -Y_PB_het*N_X_PB;
+v6_4 = -Y_PB_het*N_X_PB;
+v8_5 = -Y_PB_au_diazo*N_X_PB;
+v8_6 = -Y_PB_ac_diazo*N_X_PB;
+v8_7 = -Y_PB_pro_diazo*N_X_PB;
+v8_8 = -Y_PB_bu_diazo*N_X_PB;
+v6_9 = -Y_fer*N_X_Fer;
+v6_10 = -Y_fer*N_X_Fer;
+v7_1 = -Y_PB_au*P_X_PB;
+v7_2 = -Y_PB_het*P_X_PB;
+v7_3 = -Y_PB_het*P_X_PB;
+v7_4 = -Y_PB_het*P_X_PB;
+v7_5 = -Y_PB_au_diazo*P_X_PB;
+v7_6 = -Y_PB_ac_diazo*P_X_PB;
+v7_7 = -Y_PB_pro_diazo*P_X_PB;
+v7_8 = -Y_PB_bu_diazo*P_X_PB;
+v7_9 = -Y_fer*P_X_Fer;
+v7_10 = -Y_fer*P_X_Fer;
+        
+%% pH calculation
+      SCAT = 0.04; %0.04; 0.025; 0.21 auto... Metallic cations
+      SAN = 0.0001;  %0.00010; 0.0001; 0.1 Metallic anions
+%     % Acid-base rates
+      k_A_Bac = 1e8; %ADM1; 1e10 according to STR
+      k_A_Bpro = 1e8; %ADM1; 1e10 according to STR
+      k_A_Bbu = 1e8; %ADM1; 1e10 according to STR
+      k_A_Bco2 = 1e8; %ADM1; 1e10 according to STR
+      k_A_BIP = 1e8; %ADM1; 1e10 according to STR
+      k_A_BIN = 1e8; %ADM1; 1e10 according to STR
+%     % Temperature correction
+      R = 0.08314;
+      T_base = 298.15;
+      T = 273.15+29; % u(26) if entry (22 auto)
+      factor = (1.0/T_base - 1.0/(T+273.15))/(100.0*R);
+%     Acid-base equilibrium constants
+      pK_w_base    = 14.0;
+      pK_a_ac_base = 4.76;
+      pK_a_pro_base = 4.87;
+      pK_a_bu_base = 4.84;
+      pK_a_co2_base= 6.35;
+      pK_a_IN_base = 9.25;
+      pK_a_IP_base = 7.21;
+      K_a_AC  = 10^(-pK_a_ac_base); %Check and correct for T
+      K_a_pro  = 10^(-pK_a_pro_base);
+      K_a_bu  = 10^(-pK_a_bu_base);
+      K_a_CO2 = 10^(-pK_a_co2_base)*exp(7674*factor);
+      K_a_NH4 = 10^(-pK_a_IN_base)*exp(51965*factor); % Correct for I?
+      K_a_H2PO4 = 10^(-pK_a_IP_base)*exp(30840*factor); % Check (1302.5 and 1298.7 deltaH H2PO4 and HPO4) (H3PO4 1271.66)
+      K_w = 10^(-pK_w_base)*exp(55900*factor);
+      % pH calculation
+      phi = SCAT + (SIN-SNH3)/14000 - SHCO3_ - SAc_/64254 - SPro_/(111861)...
+          - SBu_/(160353) - SH2PO4_/30973 - SAN;      
+      S_H_ion = -phi*0.5+0.5*sqrt(phi*phi+4.0*K_w);
+      %S_H_ion = 10^-7;
+      pHout = -log10(S_H_ion);
+ 
+      pH_list = [pH_list;pHout]; 
+    
+%% Gas transfer
+    % H2 
+    K_H_H2_base = 0.00078*0.9970; %(mol/L/bar)
+    kLa_H2 = 53.8; %d-1 (53.8 600 rpm; 28.7 150 rpm)
+    P_gas_H2 = H2_gas*R*T; %bar
+    K_H_H2 = K_H_H2_base*exp(530*((1/T)-(1/T_base)));
+    H2_sat = K_H_H2*P_gas_H2*16*1000;
+    % CO2
+    K_H_co2_base = 0.035/1.013; %(mol/L/bar)
+    kLa_CO2 = 41.9; %d-1 (41.9 600 rpm; 17.1 150 rpm)
+    P_gas_co2 = CO2_gas*R*T;
+    K_H_co2 = K_H_co2_base*exp(-19410.0*factor);
+    CO2_sat = K_H_co2*P_gas_co2;
+    % N2 
+    K_H_N2_base = 0.00060*0.9970; %(mol/L/bar)
+    kLa_N2 = 33.54; %d-1 (33.54 600 rpm)
+    P_gas_N2 = N2_gas*R*T; %bar
+    K_H_N2 = K_H_N2_base*exp(530*((1/T)-(1/T_base)));
+    N2_sat = K_H_N2*P_gas_N2*14.5*2*1000;
+       
+    %% Inhibition equations
+    % Inorg N limitation
+    I_INlim = SIN/(K_IN + SIN);
+    % Inorg P limitation
+    I_IPlim = SIP/(K_IP + SIP);
+    % N2 limitation
+    I_N2lim_het = SN2/(K_N2_het + SN2);
+    I_N2lim_aut = SN2/(K_N2_aut + SN2);
+    % NH3 inhibiting N2 fixation
+    I_IN_N2 = K_IN_N2/(K_IN_N2 + SIN);
+    % Inhibitory factors fermentation
+    I_INlim_fer = SIN/(K_IN_fer + SIN);
+    I_h2_pro = KI_H2_pro/(KI_H2_pro + SH2);
+    I_h2_bu = KI_H2_bu/(KI_H2_bu + SH2);
+    
+%     
+%%  % --------------------- RATE EQUATIONS ----------------------------
+   
+    % AUTOTROPHIC UPTAKE OF H2 BY PPB
+    r1 = kM_H2*(SIC/(K_IC + SIC))*(SH2/(K_H2 + SH2))*XPB...
+        *I_INlim*I_IPlim;
+    % HETEROTROPHIC UPTAKE OF ACETATE BY PPB
+    r2 = kM_Ac*(SAc/(K_Ac + SAc))*XPB...
+        *I_INlim*I_IPlim;    
+    % HETEROTROPHIC UPTAKE OF PROPIONATE BY PPB
+    r3 = kM_Pro*(SPro/(K_Pro + SPro))*XPB...
+        *I_INlim*I_IPlim;  
+    % HETEROTROPHIC UPTAKE OF BUTYRATE BY PPB
+    r4 = kM_Bu*(SBu/(K_Bu + SBu))*XPB...
+        *I_INlim*I_IPlim;      
+    % AUTOTROPHIC-DIAZOTROPHIC UPTAKE OF H2 BY PPB
+    r5 = kM_H2_diazo*(SIC/(K_IC + SIC))*(SH2/(K_H2_diazo + SH2))*XPB...
+        *I_N2lim_aut*I_IPlim*I_IN_N2;  
+    % HETEROTROPHIC-DIAZOTROPHIC UPTAKE OF ACETATE BY PPB
+    r6 = kM_Ac_diazo*(SAc/(K_Ac_diazo + SAc))*XPB...
+        *I_N2lim_het*I_IPlim*I_IN_N2;    
+    % HETEROTROPHIC-DIAZOTROPHIC UPTAKE OF PROPIONATE BY PPB
+    r7 = kM_Pro_diazo*(SPro/(K_Pro_diazo + SPro))*XPB...
+        *I_N2lim_het*I_IPlim*I_IN_N2;  
+    % HETEROTROPHIC-DIAZOTROPHIC UPTAKE OF BUTYRATE BY PPB
+    r8 = kM_Bu_diazo*(SBu/(K_Bu_diazo + SBu))*XPB...
+        *I_N2lim_het*I_IPlim*I_IN_N2;  
+    % PROPIONATE UPTAKE OF BUTYRATE BY FER
+    r9 = kM_fer_pro*(SPro/(K_fer_pro + SPro))*XPB...
+        *I_INlim_fer*I_h2_pro;
+    % BUTYRATE UPTAKE OF BUTYRATE BY FER
+    r10 = kM_fer_bu*(SBu/(K_fer_bu + SBu))*XPB...
+        *I_INlim_fer*I_h2_bu;    
+    % BIOMASS DECAY
+    r11 = kDEC_PB*XPB;
+    r12 = kDEC_Fer*XFer;
+    % H2 SUPPLY
+    rH2 = kLa_H2*(SH2-H2_sat);
+    % N2 SUPPLY
+    rN2 = kLa_N2*(SN2-N2_sat);
+    % CO2 losses (Na2CO3 used as C source)
+    rCO2 = kLa_CO2*((SIC-SHCO3_)-CO2_sat);
+    %pH calculation
+    procA_Ac = k_A_Bac*(SAc_*(K_a_AC+S_H_ion)-K_a_AC*SAc);
+    procA_Pro = k_A_Bpro*(SPro_*(K_a_pro+S_H_ion)-K_a_pro*SPro);
+    procA_Bu = k_A_Bbu*(SBu_*(K_a_bu+S_H_ion)-K_a_bu*SBu);
+    procA_C = k_A_Bco2*(SHCO3_*(K_a_CO2+S_H_ion)-K_a_CO2*SIC);
+    procA_N = k_A_BIN*(SNH3*(K_a_NH4+S_H_ion)-K_a_NH4*SIN);
+    procA_P = k_A_BIP*(SH2PO4_*(K_a_H2PO4+S_H_ion)-K_a_H2PO4*SIP);
+    
+    %% MASS BALANCE OVER STATE VARIABLES
+   
+    dydt(1) = u(21)/Vliq * (u(1)-SIC) + r1*v1_1 + r2*v1_2...
+          + r3*f_IC_pro_ph + r4*v1_4 + r5*v1_5...
+          + r6*v1_6 + r7*v1_7 + r8*v1_8 + v1_9*r9 - rCO2;                         % SIC
+    
+    dydt(2) = u(21)/Vliq * (u(2)-SAc) - r2 - r6 + r9*(1-Y_fer)*0.57...
+        + r10*(1-Y_fer)*0.76;                                                     % SAc    
+    
+    dydt(3) = u(21)/Vliq * (u(3)-SPro) - r3 - r7 - r9;                            % SPro  
+    
+    dydt(4) = u(21)/Vliq * (u(4)-SBu) - r4 - r8 - r10;                            % SBu  
+    
+    dydt(5) = u(21)/Vliq * (u(5)-SH2) - rH2 + r1*(-f_H2_au) +...
+        r5*(-f_H2_au) + r6*f_H2_diazo + r7*f_H2_diazo...
+        + r8*f_H2_diazo + r9*(1-Y_fer)*0.43 + r10*(1-Y_fer)*0.24;                 % SH2  
+      
+    dydt(6) = u(21)/Vliq * (u(6)-SIN) + r1*v6_1 + r2*v6_2 + r3*v6_3...
+        + r4*v6_4 + r9*v6_9 + r10*v6_10;                                          % SIN
+        
+    dydt(7) = u(21)/Vliq * (u(7)-SIP) + r1*v7_1 + r2*v7_2 + r3*v7_3...
+        + r4*v7_4 + r5*v7_5 + r6*v7_6 + r7*v7_7 + r8*v7_8 + r9*v7_9...
+        + r10*v7_10;                                                              % SIP
+
+    dydt(8) = u(21)/Vliq * (u(8)-SN2) + r5*v8_5 + r6*v8_6 + r7*v8_7...
+        + r8*v8_8 - rN2;                                                          % SN2
+    
+    dydt(9) = u(21)/Vliq * (u(9)-XPB) + r1*Y_PB_au + r2*Y_PB_het...
+        + r3*Y_PB_het + r4*Y_PB_het + r5*Y_PB_au_diazo +...
+        + r6*Y_PB_ac_diazo + r7*Y_PB_pro_diazo + r8*Y_PB_pro_diazo - r11;         % XPB
+    
+    dydt(10) = u(21)/Vliq * (u(10)-XFer) + r9*Y_fer + r10*Y_fer - r12;            % XFer
+    
+    dydt(11) = u(21)/Vliq * (u(11)-XC) + r11 + r12;                               % XC
+
+    dydt(12) = u(22)*u(23)/Vgas - u(26)*H2_gas/Vgas + rH2*Vliq/Vgas/1000/16;      % H2g
+
+    dydt(13) = u(22)*u(24)/Vgas - u(26)*CO2_gas/Vgas + rCO2*Vliq/Vgas;            % CO2g
+    
+    dydt(14) = u(22)*u(25)/Vgas - u(26)*N2_gas/Vgas + rN2*Vliq/Vgas/1000/(14.5*2);% N2g
+    
+    dydt(15) = -procA_C;                                                          % SHCO3- 
+    dydt(16) = -procA_N;                                                          % SNH3 
+    dydt(17) = -procA_P;                                                          % SH2PO4_
+    dydt(18) = -procA_Ac;                                                         % SAc_
+    dydt(19) = -procA_Pro;                                                        % SPro_ 
+    dydt(20) = -procA_Bu;                                                         % SBu_ 
+    
+dydt = dydt';
+        
+   if nargout > 1
+       pHout = pH_list(1:(end-1),:);
+       tout = t_list(1:(end-1),:);
+   end
+end
