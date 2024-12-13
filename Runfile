@@ -1,0 +1,78 @@
+%% Runfile for PPB_N2_auto model
+clear all; clc
+
+%% Run ode solver
+data = csvread('dynamic_Influent_auto_diazo.csv'); 
+data_t0 = csvread('initial_data_auto_diazo.csv');
+tu = data(:,1); % Time (t) to which raw input (u) is mapped
+%----------------------------------------------
+%% Assign variable names to influent data%
+
+% Diazo Het:
+%Vliq = 0.489; % (L)
+%Vgas = 1.527;
+
+% Diazo Auto:
+Vliq = 0.499; % (L)
+Vgas = 1.518;
+
+% Auto (non-diazo):
+%Vliq = 0.197;
+%Vgas = 0.388;
+
+% Ac_NH3 (photohetero non-diazo):
+%  Vliq = 0.25;
+%  Vgas = 0.25;
+
+% Order in input file: Time (:,1),...
+SIC = data(:,2);
+SAc = data(:,3);
+SPro = data(:,4);
+SBu = data(:,5);
+SH2 = data(:,6);
+SIN = data(:,7);
+SIP = data(:,8);
+SN2 = data(:,9);
+XPB = data(:,10);
+XFer = data(:,11);
+XC = data(:,12);
+H2_gas = data(:,13);
+CO2_gas = data(:,14);
+N2_gas = data(:,15);
+SHCO3_ = data(:,16);
+SNH3 = data(:,17);
+SH2PO4_ = data(:,18);
+SAc_ = data(:,19);
+SPro_ = data(:,20);
+SBu_ = data(:,21);
+
+% Flowrates
+Qin = data(:,22);
+QinG = data(:,23);
+H2inG = data(:,24);
+CO2inG = data(:,25);
+N2inG = data(:,26);
+QoutG = data(:,27);
+% T = data(:,28);
+
+% Order of vars in model (u); %Qin = u(21)
+feed = [SIC, SAc, SPro, SBu, SH2, SIN, SIP, SN2, XPB, XFer, XC, H2_gas,...
+    CO2_gas, N2_gas, SHCO3_, SNH3, SH2PO4_, SAc_, SPro_, SBu_,...
+    Qin, QinG, H2inG, CO2inG, N2inG, QoutG];
+
+% Duration of experiment/simulation (d)
+% tvec = [0 2.15]; %(auto non-diazo)
+% tvec = [0 1.70]; %(hetero non-diazo)
+% tvec = [0 1.8]; %(hetero diazo)
+ tvec = [0 3.81]; %(auto diazo)
+
+%% Run ode solver
+options = odeset('RelTol',4e-9,'AbsTol',4e-9);
+
+%solve ODE
+tic
+[t,y]=ode15s(@(t,y)PPB_N2_pH(t,y,tu,feed,Vliq,Vgas),tvec,data_t0(1,1:20),options);
+toc
+
+plots_PPB_N2_diazo
+%plots_PPB_N2
